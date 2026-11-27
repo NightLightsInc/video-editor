@@ -283,4 +283,72 @@ $('#as').onclick=()=>{if(!au[selA])return alert('Click an audio bar in the timel
 $('#ad').onclick=delAudio;$('#ts').onclick=()=>$('#sp').click();$('#td').onclick=delSel;
 $('#tzo').onclick=()=>{tz=Math.max(1,tz-1);$('#tz').value=tz;ui()};$('#tzi').onclick=()=>{tz=Math.min(12,tz+1);$('#tz').value=tz;ui()};
 ui();requestAnimationFrame(loop);
-</script></body></html>
+</script><script>
+/*
+  NightLights video editor receiver (from the NightLights Art Pad).
+  Paste inside a script element at the END of the video editor page, after the editor's own scripts.
+  It adds artwork, storyboard videos and timelapses sent by the art pad to the editor timeline,
+  and lets "Import media" read art pad PDFs as picture clips.
+*/
+(function () {
+  var ALLOWED = ['https://nightlightsinc.github.io', 'https://www.nightlightsinc.org', 'https://nightlightsinc.org'];
+  var allowed = function (o) { return ALLOWED.indexOf(o) >= 0 || o === location.origin; };
+
+  async function addToEditor(files, seconds) {
+    for (var i = 0; i < files.length; i++) {
+      var before = clips.length;
+      await addFile(files[i]);
+      if (seconds[i] && clips.length > before) { var c = clips[clips.length - 1]; c.out = c.in + seconds[i]; }
+    }
+    if (clips.length > 1 && clips[0].type === 'd') { clips.splice(0, 1); sel = Math.max(0, clips.length - 1); }
+    ui();
+  }
+
+  /* art pad PDFs hold one JPEG per page: pull them out so they show as pictures */
+  async function pdfPictures(file) {
+    var bytes = new Uint8Array(await file.arrayBuffer()), text = '';
+    for (var i = 0; i < bytes.length; i += 32768) text += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768));
+    var re = /\/Filter\/DCTDecode\/Length (\d+)>>\r?\nstream\r?\n/g, m, out = [];
+    while ((m = re.exec(text))) {
+      var start = m.index + m[0].length;
+      out.push(new File([bytes.slice(start, start + Number(m[1]))], file.name.replace(/\.pdf$/i, '') + '-page-' + (out.length + 1) + '.jpg', { type: 'image/jpeg' }));
+    }
+    return out;
+  }
+  if (typeof addFile === 'function' && !window.nightLightsPdfHook) {
+    window.nightLightsPdfHook = true;
+    var original = addFile;
+    addFile = async function (f) {
+      if (/\.pdf$/i.test(f.name)) {
+        var pics = await pdfPictures(f);
+        if (pics.length) { for (var p = 0; p < pics.length; p++) await original(pics[p]); return; }
+      }
+      return original(f);
+    };
+  }
+
+  window.addEventListener('message', async function (e) {
+    if (!allowed(e.origin) || !e.source) return;
+    var d = e.data || {}, files = [], seconds = [];
+    if (d.type === 'nightlights:ping') { e.source.postMessage({ type: 'nightlights:editor-ready' }, e.origin); return; }
+    if (d.type === 'nightlights:import-pdf' && d.buffer instanceof ArrayBuffer) {
+      window.nightLightsPDF = new File([d.buffer], d.name || 'nightlights-artwork.pdf', { type: 'application/pdf' });
+      if (d.images && d.images.length) d.images.forEach(function (buf, i) {
+        files.push(new File([buf], 'art-page-' + (i + 1) + '.png', { type: 'image/png' }));
+        seconds.push((d.durations || [])[i] || 5);
+      });
+      else { files.push(window.nightLightsPDF); seconds.push(5); }
+    } else if (d.type === 'nightlights:import-files' && Array.isArray(d.files)) {
+      d.files.forEach(function (f) {
+        files.push(new File([f.buffer], f.name, { type: String(f.mime).split(';')[0] }));
+        seconds.push(f.seconds || 0);
+      });
+    } else return;
+    var source = e.source, origin = e.origin;
+    await addToEditor(files, seconds);
+    source.postMessage({ type: 'nightlights:import-received' }, origin);
+  });
+  if (window.opener) window.opener.postMessage({ type: 'nightlights:editor-ready' }, '*');
+})();
+</script>
+</body></html>
